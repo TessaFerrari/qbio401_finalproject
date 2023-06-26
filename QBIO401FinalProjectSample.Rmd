@@ -1,0 +1,234 @@
+---
+title: "R Notebook"
+header-includes: \usepackage{textcomp}
+output:
+  word_document: default
+  pdf_document:
+    latex_engine: xelatex
+---
+
+Load packages
+
+```{r, message=FALSE, warning=FALSE, results='hide'}
+library(TCGAbiolinks)
+library(SummarizedExperiment)
+library(survival)
+library(survminer)
+library(maftools)
+```
+
+Downloading cancer data
+
+```{r, message=FALSE, warning=FALSE, results='hide'}
+setwd("C:/Users/tferrari/Desktop/FinalProject")
+
+#RNAseq data
+seq.query <- GDCquery(
+    project = "TCGA-UCEC", 
+    data.category = "Transcriptome Profiling", 
+    data.type = "Gene Expression Quantification", 
+    workflow.type = "STAR - Counts")
+
+GDCdownload(seq.query, method="api") # COMMENT OUT LINE AFTER DOWNLOAD
+sum_exp <- GDCprepare(seq.query)
+```
+
+## ---KM Plots by Clinical Data--- Showing correlations b/w clinical factors and survivorship
+
+Prepping clinical data for KM plots
+
+```{r}
+#creating a copy of clinic data
+clinic = colData(sum_exp)
+km_clinic = clinic
+
+#supplementing days to death column
+km_clinic$days_to_death[is.na(km_clinic$days_to_death) & !is.na(km_clinic$days_to_last_follow_up)] = km_clinic$days_to_last_follow_up[is.na(km_clinic$days_to_death) & !is.na(km_clinic$days_to_last_follow_up)]
+
+#removing patients with NA days_to_death or NA vital_status
+death_mask=!(is.na(km_clinic$days_to_death) | is.na(km_clinic$vital_status))
+km_clinic=km_clinic[death_mask,]
+
+#creating death event column
+km_clinic$death_event = ifelse(km_clinic$vital_status == "Dead", T, F)
+```
+
+KM plot - Age at diagnosis
+
+```{r}
+#creating a copy of clinic data
+age_clinic = km_clinic
+
+#removing patients with no reported age data
+age_mask = !is.na(age_clinic$age_at_diagnosis)
+age_clinic = age_clinic[age_mask,]
+
+#changing age from days to years
+age_clinic$age_at_diagnosis = age_clinic$age_at_diagnosis/365
+
+#categorizing patients by age group
+age_clinic$age_group = ifelse(age_clinic$age_at_diagnosis<35, "0-34", "")
+age_clinic$age_group = ifelse(age_clinic$age_at_diagnosis>=35 & age_clinic$age_at_diagnosis<55, "35-54", age_clinic$age_group)
+age_clinic$age_group = ifelse(age_clinic$age_at_diagnosis>=55 & age_clinic$age_at_diagnosis<75, "55-74", age_clinic$age_group)
+age_clinic$age_group = ifelse(age_clinic$age_at_diagnosis>=75, "75+", age_clinic$age_group)
+
+#initializing a survival object for patient age 
+age_surv_object <- Surv(time = age_clinic$days_to_death, 
+                    event = age_clinic$death_event)
+
+#initializing a fit object for patient age 
+age_fit <- surv_fit( age_surv_object ~ age_clinic$age_group, data = age_clinic )
+
+#creating the survival plot for patient age
+survplot = ggsurvplot(age_fit, 
+                      pval=TRUE,
+                      title = "Survivorship by Age Group",
+                      ggtheme = theme(plot.margin = unit(c(1,1,1,1), "cm")), 
+                      legend = "right")
+
+#formatting the patient age km plot
+age_survplot = survplot$plot + 
+  theme_bw() +  
+  theme(plot.title = element_text(hjust=0.5, size=24),
+        axis.title = element_text(size=20), 
+        axis.text = element_text(size=16),
+        legend.title = element_text(size=14),
+        legend.text = element_text(size=12))
+
+# displaying the patient age km plot
+age_survplot
+
+#saving the patient age km plot
+ggsave("C:/Users/tferrari/Desktop/FinalProject/figures/kmplot_by_age.png", 
+       plot = age_survplot,
+       width = 12,
+       height = 9)
+```
+
+## ---Gene Boxplots by Clinical Data Showing correlations b/w clinical factors and gene expression
+
+Prepping RNAseq data for boxplots
+
+```{r}
+#creating a copy of rnaseq data
+rnaseq = assays(sum_exp)$unstranded
+
+#finding ensembl gene IDs for genes of interest
+
+# COWDEN GENES
+PTEN_id_mask = (rowData(sum_exp)$gene_name == "PTEN") 
+ensembl_PTEN = rowData(sum_exp)$gene_id[ PTEN_id_mask ]
+# process repeated for other 2 cowden genes (KLLN, WWP1)
+
+# LYNCH GENES
+MLH1_id_mask = (rowData(sum_exp)$gene_name == "MLH1") 
+ensembl_MLH1 = rowData(sum_exp)$gene_id[ MLH1_id_mask ]
+# process repeated for 3 other lynch genes (MSH2, MSH6, PMS2)
+```
+
+### Cowden Syndrome Genes [*PTEN*, *KLLN*, *WWP1*]
+
+Boxplots - Age at diagnosis
+
+```{r}
+#filtering out patients with NA ages
+age_mask2 = !is.na(clinic$age_at_diagnosis)
+
+#placing patients into age categories
+patient_age_group = ifelse(clinic$age_at_diagnosis/365<35, "0-34", "")
+patient_age_group = ifelse(clinic$age_at_diagnosis/365>=35 & clinic$age_at_diagnosis/365<55, "35-54", patient_age_group)
+patient_age_group = ifelse(clinic$age_at_diagnosis/365>=55 & clinic$age_at_diagnosis/365<75, "55-74", patient_age_group)
+patient_age_group = ifelse(clinic$age_at_diagnosis/365>=75, "75+", patient_age_group)
+patient_age_group = patient_age_group[age_mask2]
+
+# PTEN counts by age
+age_PTEN_counts = rnaseq[ensembl_PTEN,age_mask2]
+age_PTEN_box = boxplot(age_PTEN_counts ~ patient_age_group,
+        main = "PTEN boxplot by age",
+        xlab = "Age Group (years)",
+        ylab = "PTEN gene counts"
+)
+# process repeated for other 2 cowden genes (KLLN, WWP1)
+```
+
+### Lynch Syndrome Genes [*MLH1*, *MSH2*, *MSH6*, *PMS2*]
+
+Boxplots - Age at diagnosis
+
+```{r}
+# MLH1 counts by age
+age_MLH1_counts = rnaseq[ensembl_MLH1,age_mask2]
+age_MLH1_box = boxplot(age_MLH1_counts ~ patient_age_group,
+        main = "MLH1 boxplot by age",
+        xlab = "Age Group (years)",
+        ylab = "MLH1 gene counts"
+)
+# process repeated for 3 other lynch genes (MSH2, MSH6, PMS2)
+```
+
+## ---Age Boxplots by Mutation Data--- Showing correlations b/w genetic mutations and age at diagnosis
+
+Downloading / prepping MAF data
+
+```{r, message=FALSE, warning=FALSE, results='hide'}
+#MAF data
+maf.query <- GDCquery(project = "TCGA-UCEC",
+                      data.category = "Simple Nucleotide Variation",
+                      data.type = "Masked Somatic Mutation",
+                      legacy = F)
+GDCdownload(maf.query) # COMMENT OUT LINE AFTER DOWNLOAD
+maf_prep <- GDCprepare(maf.query)
+
+
+#Clinical Data
+clin.query <- GDCquery(project = "TCGA-UCEC",
+                       data.category = "Clinical",
+                       file.type = "xml")
+#GDCdownload(clin.query)
+clinic2 <- GDCprepare_clinic(clin.query, clinical.info = "follow_up")
+colnames(clinic2)[colnames(clinic2) == "bcr_patient_barcode"] <- "Tumor_Sample_Barcode"
+maf_object <- read.maf(maf = maf_prep,
+                       clinicalData = clinic2,
+                       isTCGA = TRUE)
+```
+
+Determining patient mutation status
+
+```{r}
+#COWDEN GENES
+#PTEN mutations
+PTEN_maf_data = maf_object@data$Tumor_Sample_Barcode[maf_object@data$Hugo_Symbol=="PTEN"]
+maf_clinic$PTEN_mutation = ifelse(maf_clinic$patient %in% PTEN_maf_data, "Found", "Not Found")
+# process repeated for other 1 cowden gene (WWP1) 
+# Note: KLLN data not found in dataset
+
+#LYNCH GENES
+#MLH1 mutations
+MLH1_maf_data = maf_object@data$Tumor_Sample_Barcode[maf_object@data$Hugo_Symbol=="MLH1"]
+maf_clinic$MLH1_mutation = ifelse(maf_clinic$patient %in% MLH1_maf_data, "Found", "Not Found")
+# process repeated for 3 other lynch genes (MSH2, MSH6, PMS2)
+
+# KM Plots (similar to 1st section) created comparing mutants to non mutants
+```
+
+Age Boxplots - Cowden Syndrome Genes [*PTEN*, *KLLN*, *WWP1*]
+
+```{r}
+PTEN_box = boxplot(as.integer(maf_clinic$age_at_diagnosis/365) ~ maf_clinic$PTEN_mutation,
+        main = "Age boxplot by PTEN mutation",
+        xlab = "PTEN mutation",
+        ylab = "Age at Diagnosis"
+)
+# process repeated for other 1 cowden gene (WWP1)
+```
+
+Age Boxplots - Lynch Syndrome Genes [*MLH1*, *MSH2*, *MSH6*, *PMS2*]
+
+```{r}
+MLH1_box = boxplot(as.integer(maf_clinic$age_at_diagnosis/365) ~ maf_clinic$MLH1_mutation,
+        main = "Age boxplot by MLH1 mutation",
+        xlab = "MLH1 mutation",
+        ylab = "Age at Diagnosis"
+)
+# process repeated for 3 other lynch genes (MSH2, MSH6, PMS2)
+```
